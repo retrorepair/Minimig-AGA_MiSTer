@@ -690,6 +690,9 @@ minimig minimig
 	.memcfg       (memcfg           ), // memory config
 	.bootrom      (bootrom          ), // bootrom mode. Needed here to tell tg68k to also mirror the 256k Kickstart 
 
+	.USER_IN		  (USER_IN			  ),
+	.USER_OUT	  (USER_OUT			  ),
+	
 	.ide_fast     (ide_fast         ),
 	.ide_ext_irq  (ide_f_irq        ),
 	.ide_ena      (ide_ena          ),
@@ -990,7 +993,7 @@ wire mt32_mute = mt32_available &  mt32_disable;
 
 mt32pi mt32pi
 (
-	.*,
+	//.*,
 	.CE_PIXEL(ce_pix_mt32),
 	.reset(mt32_reset),
 	.midi_tx(midi_tx | mt32_mute)
