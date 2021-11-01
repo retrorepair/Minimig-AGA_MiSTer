@@ -112,7 +112,10 @@ module paula
 	output  [7:0] trackdisp,
 	output [13:0] secdisp,
 	output        floppy_fwr,
-	output        floppy_frd
+	output        floppy_frd,
+	
+	input   [6:0] USER_IN,
+	output  [6:0] USER_OUT
 );
 //--------------------------------------------------------------------------------------
 
@@ -274,7 +277,10 @@ paula_floppy pf1
 	.trackdisp(trackdisp),
 	.secdisp(secdisp),
 	.floppy_fwr (floppy_fwr),
-	.floppy_frd (floppy_frd)
+	.floppy_frd (floppy_frd),
+	
+	.USER_IN		  (USER_IN			  ),
+	.USER_OUT	  (USER_OUT			  )
 );
 
 //instantiate audio controller

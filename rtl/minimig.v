@@ -266,7 +266,11 @@ module minimig
 	input         ide_write,
 	input  [15:0] ide_writedata,
 	input         ide_read,
-	output [15:0] ide_readdata
+	output [15:0] ide_readdata,
+	
+	input   [6:0] USER_IN,
+	output  [6:0] USER_OUT
+	
 );
 
 //--------------------------------------------------------------------------------------
@@ -527,6 +531,9 @@ paula PAULA1
 	.rdata(rdata),
 	.ldata_okk(ldata_okk),
 	.rdata_okk(rdata_okk),
+	
+	.USER_IN		  (USER_IN			  ),
+	.USER_OUT	  (USER_OUT			  ),	
 
 	.floppy_drives(floppy_config[3:2])
 );

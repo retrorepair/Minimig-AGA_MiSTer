@@ -111,8 +111,25 @@ module paula_floppy
 	output  [7:0] trackdisp,
 	output [13:0] secdisp,
 	output        floppy_fwr,
-	output        floppy_frd
+	output        floppy_frd,
+	
+	input   [6:0] USER_IN,
+	output  [6:0] USER_OUT
 );
+
+// Floppy motor control  
+
+reg _motor_r;
+reg sel_r;
+reg direc_r;
+
+assign USER_OUT[0] = sel_r;
+assign USER_OUT[1] = _motor_r;
+assign USER_OUT[2] = _step_del;
+assign USER_OUT[3] = direc_r;
+
+// Ends here
+
 
 //register names and addresses
 parameter DSKBYTR = 9'h01a;
@@ -372,8 +389,32 @@ always @(posedge clk) begin
       if (!dsktrack79 && !direc)
         dsktrack[sel] <= dsktrack[sel] + 7'd1;
       else if (_dsktrack0 && direc)
-        dsktrack[sel] <= dsktrack[sel] - 7'd1;	
+        dsktrack[sel] <= dsktrack[sel] - 7'd1;
     end
+  end
+end
+
+always @(posedge clk) begin
+  if (clk7_en) begin
+	 if (motor_on) _motor_r <= 1'b0; else _motor_r <= 1'b1;
+	end
+end
+
+always @(posedge clk) begin
+  if (clk7_en) begin
+      if (!direc)
+		  direc_r <= 1'b0;
+      else if (direc)
+		  direc_r <= 1'b1;
+  end
+end
+
+always @(posedge clk) begin
+  if (clk7_en) begin
+      if (_sel[0])
+		  sel_r <= 1'b1;
+      else if (!_sel[0])
+		  sel_r <= 1'b0;
   end
 end
 
