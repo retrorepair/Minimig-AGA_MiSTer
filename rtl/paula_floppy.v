@@ -122,11 +122,15 @@ module paula_floppy
 reg _motor_r;
 reg sel_r;
 reg direc_r;
+reg _step_r;
+reg _readyreal;
 
 assign USER_OUT[0] = sel_r;
-assign USER_OUT[1] = _motor_r;
-assign USER_OUT[2] = _step_del;
-assign USER_OUT[3] = direc_r;
+assign USER_OUT[3] = _motor_r;
+assign USER_OUT[5] = _step_r;
+assign USER_OUT[1] = direc_r;
+assign USER_OUT[2] = 1'b1;
+assign USER_OUT[4] = 1'b1;
 
 // Ends here
 
@@ -373,12 +377,29 @@ always @(posedge clk) begin
   end
 end
 
+reg _track0_real;
+reg _track0temp;
+reg _readyrealtemp;
+
+always @(posedge clk) begin
+	_track0_real <= USER_IN[2];
+	_readyreal <= USER_IN[4];
+end
+
+// Make sure the real floppy drive doesn't overstep
+always @(posedge clk) begin
+	if (clk7_en) begin
+			_track0temp <= _track0_real;
+			_readyrealtemp <= _readyreal;
+	end
+end
+
 //_ready,_track0 and _change signals
 assign _change = &(_sel | _disk_change);
 
 assign _wprot = &(_sel | disk_writable);
 
-assign  _track0 =&(_selx | _dsktrack0);
+assign  _track0 = &(_selx | _dsktrack0 | _track0temp);
 
 //track control
 assign track = {dsktrack[sel],~side};
@@ -396,26 +417,11 @@ end
 
 always @(posedge clk) begin
   if (clk7_en) begin
-	 if (motor_on) _motor_r <= 1'b0; else _motor_r <= 1'b1;
+	_motor_r <= motor_on ? 1'b0 : 1'b1;
+	direc_r <= direc;
+	sel_r <= _selx;
+	_step_r <= _step;
 	end
-end
-
-always @(posedge clk) begin
-  if (clk7_en) begin
-      if (!direc)
-		  direc_r <= 1'b0;
-      else if (direc)
-		  direc_r <= 1'b1;
-  end
-end
-
-always @(posedge clk) begin
-  if (clk7_en) begin
-      if (_sel[0])
-		  sel_r <= 1'b1;
-      else if (!_sel[0])
-		  sel_r <= 1'b0;
-  end
 end
 
 // _dsktrack0 detect
@@ -427,10 +433,8 @@ assign dsktrack79 = dsktrack[sel]==82;
 // drive _ready signal control
 // Amiga DD drive activates _ready whenever _sel is active and motor is off
 // or whenever _sel is active, motor is on and there is a disk inserted (not implemented - _ready is active when _sel is active)
-assign _ready   = (_sel[3] | ~(drives[1] & drives[0])) 
-        & (_sel[2] | ~drives[1]) 
-        & (_sel[1] | ~(drives[1] | drives[0])) 
-        & (_sel[0]);
+
+assign _ready   = _readyrealtemp;
 
 //--------------------------------------------------------------------------------------
 
