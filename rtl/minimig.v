@@ -199,6 +199,8 @@ module minimig
 	input  [15:0] _joy2,       // joystick 2 [fire2,fire,up,down,left,right] (default joystick port)
 	input  [15:0] _joy3,       // joystick 3 [fire2,fire,up,down,left,right]
 	input  [15:0] _joy4,       // joystick 4 [fire2,fire,up,down,left,right]
+	input  [15:0] joya1,
+	input  [15:0] joya2,
 	input   [2:0] mouse_btn,   // mouse buttons
 	input 	     kms_level,
 	input   [1:0] kbd_mouse_type,
@@ -206,7 +208,7 @@ module minimig
 	output 	     pwr_led,     // power led
 	output 	     fdd_led,     // disk activity LED, active when DMA is on
 	output 	     hdd_led,
-	input  [63:0] rtc,
+	input  [64:0] rtc,
 
 	//host controller interface (SPI)
 	input 	     IO_UIO,
@@ -231,19 +233,7 @@ module minimig
 	output  [2:0] scanline,
 	output 	     ce_pix,
 	output  [1:0] res,
-
-	//RTG framebuffer control
-	output        rtg_ena,
-	output [11:0] rtg_hsize,
-	output [11:0] rtg_vsize,
-	output [4:0]  rtg_format,
-	output [31:0] rtg_base,
-	output [13:0] rtg_stride,
-	output        rtg_pal_clk,
-	output [23:0] rtg_pal_dw,
-	input  [23:0] rtg_pal_dr,
-	output [7:0]  rtg_pal_a,
-	output        rtg_pal_wr,
+	output reg    ntsc,
 
 	//audio
 	output [14:0] ldata,       // left DAC data
@@ -251,6 +241,12 @@ module minimig
 	output [8:0]  ldata_okk,   // left DAC data  (PWM volume)
 	output [8:0]  rdata_okk,   // right DAC data (PWM volume)
 	output  [1:0] aud_mix,
+
+	// Toccata audio
+	input         toccata_ena,
+	input   [7:0] toccata_base,
+	output [15:0] toccata_aud_left,
+	output [15:0] toccata_aud_right,
 
 	//user i/o
 	output  [1:0] cpucfg,
@@ -273,11 +269,6 @@ module minimig
 	
 );
 
-//--------------------------------------------------------------------------------------
-
-parameter [0:0] NTSC = 1'b0;	//Agnus type (PAL/NTSC)
-
-//--------------------------------------------------------------------------------------
 
 //local signals for data bus
 wire [15:0] cpu_data_in;		//cpu data bus in
@@ -293,7 +284,6 @@ wire [15:0] user_data_out;	   //user IO data out
 wire [15:0] gary_data_out;	   //data out from memory bus multiplexer
 wire [15:0] gayle_data_out;	//Gayle data out
 wire [15:0] cia_data_out;	   //cia A+B data bus out
-wire [15:0] rtg_data_out;	   //rtg data bus out
 wire [15:0] ar3_data_out;	   //Action Replay data out
 
 //local signals for address bus
@@ -330,10 +320,11 @@ wire        sel_reg;				//chip register select
 wire        sel_rtc;
 wire        sel_cia_a;			//cia A select
 wire        sel_cia_b;			//cia B select
-wire        sel_rtg;			   //rtg select
+wire        sel_toccata;
 wire        int2;					//intterrupt 2
 wire        int3;					//intterrupt 3 
 wire        int6;					//intterrupt 6
+wire        int6_toccata;
 wire        freeze;				//Action Replay freeze button
 wire        _fire0;				//joystick 1 fire signal to cia A
 wire        _fire1;				//joystick 2 fire signal to cia A
@@ -405,8 +396,6 @@ wire        gayle_irq;			//interrupt request
 wire        gayle_nrdy;       // HDD fifo is not ready for reading
 
 wire	[7:0] bank;					//memory bank select
-
-reg         ntsc = NTSC;		//PAL/NTSC video mode selection
 
 // host interface
 wire        host_cs;
@@ -505,7 +494,7 @@ paula PAULA1
 	.vblint(vbl_int),
 	.int2(int2|(ide_fast ? ide_ext_irq : gayle_irq)),
 	.int3(int3),
-	.int6(int6),
+	.int6(int6 | int6_toccata),
 	._ipl(_iplx),
 	.audio_dmal(audio_dmal),
 	.audio_dmas(audio_dmas),
@@ -548,12 +537,15 @@ userio USERIO1
 	.reg_address_in(reg_address),
 	.data_in(custom_data_in),
 	.data_out(user_data_out),
+	.pot_cnt_en(sol & ~c1 & ~c3),
 	._fire0(_fire0),
 	._fire1(_fire1),
 	._fire0_dat(_fire0_dat),
 	._fire1_dat(_fire1_dat),
 	._joy1(_joy1),
 	._joy2(_joy2),
+	.joy_ana1(joya1),
+	.joy_ana2(joya2),
 	.mouse_btn(mouse_btn),
 	.kbd_mouse_type(kbd_mouse_type),
 	.kms_level(kms_level),
@@ -664,31 +656,6 @@ ciab CIAB1
 	.portb_out({_motor,_sel3,_sel2,_sel1,_sel0,side,direc,_step})
 );
 
-//instantiate RTG registers adapter
-rtg rtg
-(
-	.clk(clk),
-	.clk7_en(clk7_en),
-	.aen(sel_rtg & cpucfg[1]), // enable only for 68020
-	.rd(cpu_rd),
-	.wr(cpu_hwr|cpu_lwr),
-	.reset(reset),
-	.rs({cpu_address_out[11:1],1'b0}),
-	.data_in(cpu_data_out),
-	.data_out(rtg_data_out),
-	.rtg_ena(rtg_ena),
-	.rtg_hsize(rtg_hsize),
-	.rtg_vsize(rtg_vsize),
-	.rtg_format(rtg_format),
-	.rtg_base(rtg_base),
-	.rtg_stride(rtg_stride),
-	.rtg_pal_clk(rtg_pal_clk),
-	.rtg_pal_dw(rtg_pal_dw),
-	.rtg_pal_dr(rtg_pal_dr),
-	.rtg_pal_a(rtg_pal_a),
-	.rtg_pal_wr(rtg_pal_wr)
-);
-
 //instantiate cpu bridge
 minimig_m68k_bridge CPU1 
 (
@@ -735,7 +702,7 @@ minimig_m68k_bridge CPU1
 //instantiate RAM banks mapper
 minimig_bankmapper BMAP1
 (
-	.chip0((~ovr|~cpu_rd|dbr) & sel_chip[0]),
+	.chip0((~ovr|~cpu_rd|dbr|cpuhlt) & sel_chip[0]),
 	.chip1(sel_chip[1]),
 	.chip2(sel_chip[2]),
 	.chip3(sel_chip[3]),	
@@ -822,6 +789,8 @@ gary GARY1
 	.xbs(xbs),
 	.memory_config(memory_config[3:0]),
 	.hdc_ena(ide_ena & ~ide_fast), // Gayle decoding enable	
+	.toccata_ena(toccata_ena),
+	.toccata_base(toccata_base),
 	.ram_rd(ram_rd),
 	.ram_hwr(ram_hwr),
 	.ram_lwr(ram_lwr),
@@ -836,10 +805,10 @@ gary GARY1
 	.sel_reg(sel_reg),
 	.sel_cia_a(sel_cia_a),
 	.sel_cia_b(sel_cia_b),
-	.sel_rtg(sel_rtg),
 	.sel_ide(sel_ide),
 	.sel_gayle(sel_gayle),
 	.sel_rtc(sel_rtc),
+	.sel_toccata(sel_toccata),
 	.reset(reset),
 	.clk(clk),
 	.rom_readonly(rom_readonly),
@@ -888,7 +857,48 @@ end
 
 //-------------------------------------------------------------------------------------
 
-wire [15:0] rtc_out = (sel_rtc && cpu_rd) ? {12'h000, rtc[{cpu_address_out[5:2], 2'b00} +:4]} : 16'h0000;
+wire [15:0] rtc_out = (sel_rtc && cpu_rd) ? {12'h000, rtc_reg[{cpu_address_out[5:2], 2'b00} +:4]} : 16'h0000;
+
+reg [63:0] rtc_reg;
+always @(posedge clk) begin
+	reg old_flg;
+	reg [31:0] cnt;
+	
+	old_flg <= rtc[64];
+	if(old_flg ^ rtc[64]) begin
+		rtc_reg <= {rtc[63:8], 8'd0};
+		cnt <= 0;
+	end
+	else if(cnt < 28375159) cnt <= cnt + 1;
+	else begin
+		cnt <= 0;
+		if(rtc_reg[3:0] < 9) rtc_reg[3:0] <= rtc_reg[3:0] + 1'd1;
+		else if(rtc_reg[7:4] < 5) rtc_reg[7:0] <= {rtc_reg[7:4] + 1'd1, 4'b0000};
+	end
+end
+
+// Toccata soundcard
+
+wire [15:0] toccata_out;
+toccata #(
+  .CLK_FREQUENCY(28_359_380)
+) toccata_board (
+	.clk(clk),
+	.rst(reset),
+	.hsync(_hsync),
+	.data_in(cpu_data_out),
+	.data_out(toccata_out),
+	.addr(cpu_address_out[15:1]),
+	.rd(cpu_rd),
+	.hwr(cpu_hwr),
+	.lwr(cpu_lwr),
+	.sel(sel_toccata),
+	.toc_int(int6_toccata),
+	.out_left(toccata_aud_left),
+	.out_right(toccata_aud_right)
+);
+
+//-------------------------------------------------------------------------------------
 
 //data multiplexer
 assign cpu_data_in[15:0]= gary_data_out[15:0]
@@ -896,7 +906,7 @@ assign cpu_data_in[15:0]= gary_data_out[15:0]
 							 | gayle_data_out[15:0]
 							 | cart_data_out[15:0]
 							 | rtc_out
-							 | rtg_data_out;
+							 | toccata_out;
 
 assign custom_data_out[15:0] = agnus_data_out[15:0]
 							 | paula_data_out[15:0]

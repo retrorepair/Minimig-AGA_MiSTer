@@ -14,7 +14,7 @@ module emu
 	input         RESET,
 
 	//Must be passed to hps_io module
-	inout  [45:0] HPS_BUS,
+	inout  [48:0] HPS_BUS,
 
 	//Base video clock. Usually equals to CLK_SYS.
 	output        CLK_VIDEO,
@@ -37,13 +37,16 @@ module emu
 	output        VGA_F1,
 	output [1:0]  VGA_SL,
 	output        VGA_SCALER, // Force VGA scaler
+	output        VGA_DISABLE, // analog out is off
 
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
 	output        HDMI_FREEZE,
+	output        HDMI_BLACKOUT,
+	output        HDMI_BOB_DEINT,
 
 `ifdef MISTER_FB
-	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
+	// Use framebuffer in DDRAM
 	// FB_FORMAT:
 	//    [2:0] : 011=8bpp(palette) 100=16bpp 101=24bpp 110=32bpp
 	//    [3]   : 0=16bits 565 1=16bits 1555
@@ -161,15 +164,18 @@ module emu
 assign ADC_BUS  = 'Z;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign BUTTONS = 0;
+assign VGA_DISABLE = 0;
 assign HDMI_FREEZE = 0;
+assign HDMI_BLACKOUT = 0;
+assign HDMI_BOB_DEINT = 0;
 
 `include "build_id.v" 
 localparam CONF_STR = {
-	"Minimig;UART115200,MIDI;",
+	"Minimig;UART115200:230400,MIDI;",
 	"J,Red(Fire),Blue,Yellow,Green,RT,LT,Pause;",
 	"jn,A,B,X,Y,R,L,Start;",
 	"jp,B,A,X,Y,R,L,Start;",
-	"- ;",
+	"-;",
 	"I,",
 	"MT32-pi: SoundFont #0,",
 	"MT32-pi: SoundFont #1,",
@@ -190,11 +196,13 @@ wire [15:0] JOY0;
 wire [15:0] JOY1;
 wire [15:0] JOY2;
 wire [15:0] JOY3;
+wire [15:0] JOYA0;
+wire [15:0] JOYA1;
 wire  [7:0] kbd_mouse_data;
 wire        kbd_mouse_level;
 wire  [1:0] kbd_mouse_type;
 wire  [2:0] mouse_buttons;
-wire [63:0] RTC;
+wire [64:0] RTC;
 
 wire        ce_pix;
 wire  [1:0] buttons;
@@ -215,7 +223,7 @@ wire  [7:0] uart_mode;
 hps_io #(.CONF_STR(CONF_STR), .CONF_STR_BRAM(0)) hps_io
 (
 	.clk_sys(clk_sys),
-	.HPS_BUS({HPS_BUS[45:42],ce_pix,HPS_BUS[40:0]}),
+	.HPS_BUS({HPS_BUS[48:42],ce_pix,HPS_BUS[40:0]}),
 
 	.status(status),
 	.status_menumask({mt32_cfg,mt32_available}),
@@ -226,7 +234,9 @@ hps_io #(.CONF_STR(CONF_STR), .CONF_STR_BRAM(0)) hps_io
 	.joystick_1(JOY1),
 	.joystick_2(JOY2),
 	.joystick_3(JOY3),
-
+	.joystick_l_analog_0(JOYA0),
+	.joystick_l_analog_1(JOYA1),
+	
 	.ioctl_wait(io_wait),
 
 	.buttons(buttons),
@@ -251,11 +261,11 @@ wire [35:0] EXT_BUS;
 hps_ext hps_ext(.*, .ide_req(ide_fast ? ide_f_req : ide_c_req),  .ide_din(ide_fast ? ide_f_readdata : ide_c_readdata));
 
 assign LED_POWER[1] = 1;
-assign LED_DISK     = {1'b1, ide_fast ? ide_f_led : ide_c_led};
+assign LED_DISK     = {1'b0, ide_fast ? ide_f_led : ide_c_led};
 
 assign VGA_SCALER   = FB_EN;
 
-wire clk_57, clk_114;
+wire clk_114;
 wire clk_sys;
 wire locked;
 
@@ -264,8 +274,67 @@ pll pll
 	.refclk(CLK_50M),
 	.outclk_0(clk_114),
 	.outclk_1(clk_sys),
+	.reconfig_to_pll(reconfig_to_pll),
+	.reconfig_from_pll(reconfig_from_pll),
 	.locked(locked)
 );
+
+wire [63:0] reconfig_to_pll;
+wire [63:0] reconfig_from_pll;
+wire        cfg_waitrequest;
+reg         cfg_write;
+reg   [5:0] cfg_address;
+reg  [31:0] cfg_data;
+
+pll_cfg pll_cfg
+(
+	.mgmt_clk(CLK_50M),
+	.mgmt_reset(0),
+	.mgmt_waitrequest(cfg_waitrequest),
+	.mgmt_read(0),
+	.mgmt_readdata(),
+	.mgmt_write(cfg_write),
+	.mgmt_address(cfg_address),
+	.mgmt_writedata(cfg_data),
+	.reconfig_to_pll(reconfig_to_pll),
+	.reconfig_from_pll(reconfig_from_pll)
+);
+
+always @(posedge CLK_50M) begin
+	reg ntscd = 0, ntscd2 = 0;
+	reg [2:0] state = 0;
+	reg ntsc_r;
+
+	ntscd <= ntsc;
+	ntscd2 <= ntscd;
+
+	cfg_write <= 0;
+	if(ntscd2 == ntscd && ntscd2 != ntsc_r) begin
+		state <= 1;
+		ntsc_r <= ntscd2;
+	end
+
+	if(!cfg_waitrequest) begin
+		if(state) state<=state+1'd1;
+		case(state)
+			1: begin
+					cfg_address <= 0;
+					cfg_data <= 0;
+					cfg_write <= 1;
+				end
+			3: begin
+					cfg_address <= 7;
+					cfg_data <= ntsc_r ? 702807747 : 343817200;
+					cfg_write <= 1;
+				end
+			5: begin
+					cfg_address <= 2;
+					cfg_data <= 0;
+					cfg_write <= 1;
+				end
+		endcase
+	end
+end
 
 wire reset = ~locked | buttons[1] | RESET;
 
@@ -338,7 +407,6 @@ always @(posedge clk_114) begin
 	ram_cs <= ~(ram_ready & cyc & cpu_type) & ram_sel;
 end
 
-
 wire  [1:0] cpu_state;
 wire        cpu_nrst_out;
 wire  [3:0] cpu_cacr;
@@ -364,6 +432,9 @@ wire [15:0] ram_dout  = zram_sel ? ram_dout2  : ram_dout1;
 wire        ram_ready = zram_sel ? ram_ready2 : ram_ready1;
 wire        zram_sel  = |ram_addr[28:26];
 wire        ramshared;
+
+wire [7:0] toccata_base;
+wire toccata_ena;
 
 cpu_wrapper cpu_wrapper
 (
@@ -398,6 +469,9 @@ cpu_wrapper cpu_wrapper
 	.fastramcfg   (memcfg[6:4]     ),
 	.bootrom      (bootrom         ),
 
+	.toccata_ena  (toccata_ena     ),
+	.toccata_base (toccata_base    ),
+	
 	.ramsel       (ram_sel         ),
 	.ramaddr      (ram_addr        ),
 	.ramlds       (ram_lds         ),
@@ -504,6 +578,8 @@ wire        ide_f_irq;
 wire  [5:0] ide_f_req;
 wire [15:0] ide_f_readdata;
 
+// fastchip is working on CPU clock.
+// Only high performance 68020 devices are inside
 fastchip fastchip
 (
 	.clk          (clk_114           ),
@@ -523,16 +599,27 @@ fastchip fastchip
 	.rnw          (fastchip_rnw      ),
 	.longword     (fastchip_lw       ),
 
+	//RTG framebuffer control
+	.rtg_ena      (FB_EN             ),
+	.rtg_hsize    (FB_WIDTH          ),
+	.rtg_vsize    (FB_HEIGHT         ),
+	.rtg_format   (FB_FORMAT         ),
+	.rtg_base     (FB_BASE           ),
+	.rtg_stride   (FB_STRIDE         ),
+	.rtg_pal_clk  (FB_PAL_CLK        ),
+	.rtg_pal_dw   (FB_PAL_DOUT       ),
+	.rtg_pal_dr   (FB_PAL_DIN        ),
+	.rtg_pal_a    (FB_PAL_ADDR       ),
+	.rtg_pal_wr   (FB_PAL_WR         ),
+
 	.ide_ena      (ide_ena & ide_fast),
 	.ide_irq      (ide_f_irq         ),
-
 	.ide_req      (ide_f_req         ),
 	.ide_address  (ide_addr          ),
 	.ide_write    (ide_wr            ),
 	.ide_writedata(ide_dout          ),
 	.ide_read     (ide_rd            ),
 	.ide_readdata (ide_f_readdata    ),
-
 	.ide_led      (ide_f_led         )
 );
 
@@ -573,11 +660,15 @@ wire [9:0]  rdata_okk;     // right DAC data (PWM vol version)
 wire        vs;
 wire        hs;
 wire  [1:0] ar;
+wire        ntsc;
 
 wire  [5:0] ide_c_req;
 wire [15:0] ide_c_readdata;
 wire        ide_c_led;
 wire        ide_ena;
+
+wire [15:0] toccata_aud_left;
+wire [15:0] toccata_aud_right;
 
 minimig minimig
 (
@@ -631,6 +722,8 @@ minimig minimig
 	._joy2        (~JOY1            ), // joystick 2 [fire4,fire3,fire2,fire,up,down,left,right] (default joystick port)
 	._joy3        (~JOY2            ), // joystick 1 [fire4,fire3,fire2,fire,up,down,left,right]
 	._joy4        (~JOY3            ), // joystick 2 [fire4,fire3,fire2,fire,up,down,left,right]
+	.joya1        (JOYA0            ),
+	.joya2        (JOYA1            ),
 	.mouse_btn    (mouse_buttons    ), // mouse buttons
 	.kbd_mouse_data (kbd_mouse_data ), // mouse direction data, keycodes
 	.kbd_mouse_type (kbd_mouse_type ), // type of data
@@ -660,21 +753,9 @@ minimig minimig
 	.vblank       (vbl              ),
 	.ar           (ar               ),
 	.scanline     (fx               ),
-	//.ce_pix       (ce_pix           ),
+	//.ce_pix     (ce_pix           ),
 	.res          (res              ),
-
-	//RTG framebuffer control
-	.rtg_ena      (FB_EN            ),
-	.rtg_hsize    (FB_WIDTH         ),
-	.rtg_vsize    (FB_HEIGHT        ),
-	.rtg_format   (FB_FORMAT        ),
-	.rtg_base     (FB_BASE          ),
-	.rtg_stride   (FB_STRIDE        ),
-	.rtg_pal_clk  (FB_PAL_CLK       ),
-	.rtg_pal_dw   (FB_PAL_DOUT      ),
-	.rtg_pal_dr   (FB_PAL_DIN       ),
-	.rtg_pal_a    (FB_PAL_ADDR      ),
-	.rtg_pal_wr   (FB_PAL_WR        ),
+	.ntsc         (ntsc             ),
 
 	//audio
 	.ldata        (ldata            ), // left DAC data
@@ -684,6 +765,12 @@ minimig minimig
 
 	.aud_mix      (AUDIO_MIX        ),
 
+	//toccata soundcard
+	.toccata_ena  (toccata_ena),
+	.toccata_base (toccata_base),
+	.toccata_aud_left (toccata_aud_left),
+	.toccata_aud_right(toccata_aud_right),
+	
 	//user i/o
 	.cpucfg       (cpucfg           ), // CPU config
 	.cachecfg     (cachecfg         ), // Cache config
@@ -1112,12 +1199,29 @@ always @(posedge CLK_AUDIO) begin
 	if(old_r0 == old_r1) aud_r <= old_r1;
 end
 
+wire  [15:0] cdda_l;
+wire  [15:0] cdda_r;
+wire  [15:0] cdda_dout;
+wire         cdda_req;
+wire         cdda_wr;
+
+cdda #(28375160) cdda
+(
+	.CLK(clk_sys),
+	.nRESET(~reset),
+	.WRITE_REQ(cdda_req),
+	.WRITE(cdda_wr),
+	.DIN(cdda_dout),
+	.AUDIO_L(cdda_l),
+	.AUDIO_R(cdda_r)
+);
+
 reg [15:0] out_l, out_r;
 always @(posedge CLK_AUDIO) begin
 	reg [16:0] tmp_l, tmp_r;
 
-	tmp_l <= {aud_l[15],aud_l} + (mt32_mute ? 17'd0 : {mt32_i2s_l[15],mt32_i2s_l});
-	tmp_r <= {aud_r[15],aud_r} + (mt32_mute ? 17'd0 : {mt32_i2s_r[15],mt32_i2s_r});
+	tmp_l <= {aud_l[15],aud_l} + {toccata_aud_left[15],toccata_aud_left} + (mt32_mute ? 17'd0 : {mt32_i2s_l[15],mt32_i2s_l}) + {cdda_l[15], cdda_l};
+	tmp_r <= {aud_r[15],aud_r} + {toccata_aud_right[15],toccata_aud_right} + (mt32_mute ? 17'd0 : {mt32_i2s_r[15],mt32_i2s_r}) + {cdda_r[15], cdda_r};
 
 	// clamp the output
 	out_l <= (^tmp_l[16:15]) ? {tmp_l[16], {15{tmp_l[15]}}} : tmp_l[15:0];
